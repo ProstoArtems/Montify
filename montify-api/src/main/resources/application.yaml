@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: montify-api
+server:
+  port: 8080
