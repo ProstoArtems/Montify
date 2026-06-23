@@ -35,69 +35,63 @@ func (o *Orchestrator) ProcessRender(ctx context.Context, task *RenderTask) erro
 	if err := os.MkdirAll(tmpDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	// Гарантируем очистку локального диска после завершения шага
 	defer os.RemoveAll(tmpDir)
 
 	// 2. Скачиваем все необходимые файлы из MinIO
+	uniqueFiles := make(map[string]bool)
+	var orderedUniqueFiles []string
 	for _, segment := range task.Manifest.Segments {
-		log.Printf("Downloading %s from MinIO...", segment.FileName)
-		_, err := o.storage.DownloadInput(ctx, task.SessionID, segment.FileName, tmpDir)
+		if !uniqueFiles[segment.FileName] {
+			uniqueFiles[segment.FileName] = true
+			orderedUniqueFiles = append(orderedUniqueFiles, segment.FileName)
+		}
+	}
+
+	for _, fileName := range orderedUniqueFiles {
+		log.Printf("Downloading %s from MinIO...", fileName)
+		_, err := o.storage.DownloadInput(ctx, task.SessionID, fileName, tmpDir)
 		if err != nil {
 			o.notifier.UpdateStatus(ctx, task.RenderID, "FAILED")
 			return err
 		}
 	}
 
-	// 3. Формируем аргументы FFmpeg с учетом обрезки видео
+	// 3. Формируем аргументы FFmpeg с использованием быстрого поиска (-ss и -to перед -i)
 	outputFile := filepath.Join(tmpDir, "final.mp4")
 	args := []string{"-y"}
 
-	// Объявляем все входные файлы
-	for _, segment := range task.Manifest.Segments {
-		localPath := filepath.Join(tmpDir, segment.FileName)
-		args = append(args, "-i", localPath)
-	}
-
-	// Строим filter_complex для одновременной обрезки видео и звука
 	var filterComplex string
-	var concatInputs string // Будем собирать пары [v0][a0][v1][a1] в одну строку
+	var concatInputs string
 
 	for i, segment := range task.Manifest.Segments {
+		localPath := filepath.Join(tmpDir, segment.FileName)
+
+		// Добавляем параметры обрезки ПЕРЕД флагом -i для точного позиционирования
+		if segment.StartFrom != "" {
+			args = append(args, "-ss", segment.StartFrom)
+		}
+		if segment.EndAt != "" {
+			args = append(args, "-to", segment.EndAt)
+		}
+
+		args = append(args, "-i", localPath)
+
+		// Так как мы обрезали видео на входе, внутри filter_complex нам
+		// больше не нужны trim и atrim! Потоки уже заходят чистыми, начиная с 0-й секунды.
 		videoLabel := fmt.Sprintf("[v%d]", i)
 		audioLabel := fmt.Sprintf("[a%d]", i)
 
-		start := "0"
-		if segment.StartFrom != "" {
-			start = segment.StartFrom
-		}
+		// Сбрасываем PTS/ANPTS для правильной склейки в concat
+		filterComplex += fmt.Sprintf("[%d:v]setpts=PTS-STARTPTS%s;", i, videoLabel)
+		filterComplex += fmt.Sprintf("[%d:a]asetpts=PTS-STARTPTS%s;", i, audioLabel)
 
-		// Обрезка видео-потока
-		videoTrim := fmt.Sprintf("[%d:v]trim=start=%s", i, start)
-		if segment.EndAt != "" {
-			videoTrim += fmt.Sprintf(":end=%s", segment.EndAt)
-		}
-		videoTrim += ",setpts=PTS-STARTPTS" + videoLabel + ";"
-
-		// Обрезка аудио-потока
-		audioTrim := fmt.Sprintf("[%d:a]atrim=start=%s", i, start)
-		if segment.EndAt != "" {
-			audioTrim += fmt.Sprintf(":end=%s", segment.EndAt)
-		}
-		audioTrim += ",asetpts=PTS-STARTPTS" + audioLabel + ";"
-
-		filterComplex += videoTrim + audioTrim
-
-		// КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: передаем потоки парами (видео, затем аудио для каждого сегмента)
 		concatInputs += videoLabel + audioLabel
 	}
 
-	// Соединяем видео и аудио через concat. Передаем строго упорядоченные пары.
+	// Склеиваем уже подготовленные и идеально обрезанные потоки
 	filterComplex += fmt.Sprintf("%sconcat=n=%d:v=1:a=1[outv][outa]", concatInputs, len(task.Manifest.Segments))
 
-	// Добавляем фильтр и мапим оба выходных потока
 	args = append(args, "-filter_complex", filterComplex, "-map", "[outv]", "-map", "[outa]")
-
-	// Кодеки сборки
 	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", outputFile)
 
 	// 4. Запуск FFmpeg
