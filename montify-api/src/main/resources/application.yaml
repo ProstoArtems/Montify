@@ -1,5 +1,22 @@
 spring:
   application:
     name: montify-api
+
+  servlet:
+    multipart:
+      max-file-size: 500MB       # Максимальный размер одного файла
+      max-request-size: 500MB    # Максимальный размер всего запроса (включая метаданные)
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+minio:
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket-name: video-editor
+
 server:
   port: 8080
