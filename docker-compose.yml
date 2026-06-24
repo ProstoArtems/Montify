@@ -1,5 +1,28 @@
-version: '3.8'
 services:
+  api:
+    build:
+      context: ./montify-api              # Путь к директории, где лежат pom.xml и src вашего Java-проекта
+      dockerfile: Dockerfile # Имя Докерфайла для Java (создадим его ниже)
+    container_name: montify_api
+    ports:
+      - "8080:8080"           # Пробрасываем стандартный порт Spring Boot наружу
+    depends_on:
+      - redis
+      - minio
+    restart: always
+    env_file:
+      - .env # Переопределяем localhost на имена сервисов внутри сети Docker
+    environment:
+      - REDIS_ADDR=redis:6379
+      - MINIO_ENDPOINT=minio:9000
+    #environment:
+    #  - REDIS_ADDR=redis:6379
+    #  - REDIS_QUEUE_NAME=video_render_queue
+    #  - MINIO_ENDPOINT=minio:9000
+    #  - MINIO_ACCESS_KEY=minioadmin
+    #  - MINIO_SECRET_KEY=minioadmin
+    #  - MINIO_BUCKET_NAME=video-editor
+    #  - MINIO_USE_SSL=false
   media-worker:
     build:
       context: ./media-worker  
@@ -35,3 +58,6 @@ services:
 volumes:
   redis_data:
   minio_data:
+
+
+  
