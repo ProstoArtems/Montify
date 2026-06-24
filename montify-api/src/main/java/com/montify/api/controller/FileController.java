@@ -3,9 +3,16 @@ package com.montify.api.controller;
 import com.montify.api.model.UserSession;
 import com.montify.api.service.StorageService;
 import com.montify.api.service.SessionService;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 import java.util.Map;
 
@@ -50,5 +57,15 @@ public class FileController {
                 "fileKey", fileKey,
                 "sessionId", sessionId
         ));
+    }
+
+    @GetMapping("/export/{sessionId}")
+    public ResponseEntity<InputStreamResource> exportVideo(@PathVariable String sessionId) {
+        ResponseInputStream<GetObjectResponse> s3Stream = storageService.getExportedFileStream(sessionId);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"final_" + sessionId + ".mp4\"")
+                .body(new InputStreamResource(s3Stream));
     }
 }

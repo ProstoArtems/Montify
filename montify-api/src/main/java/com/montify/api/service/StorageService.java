@@ -5,9 +5,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import java.nio.file.Path;
+import software.amazon.awssdk.core.ResponseInputStream;
 
 import java.io.IOException;
 import java.util.UUID;
@@ -48,18 +49,14 @@ public class StorageService {
         }
     }
 
-    public void downloadFile(String minioKey, Path localPath) {
-        try {
-            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(minioKey)
-                    .build();
+    public ResponseInputStream<GetObjectResponse> getExportedFileStream(String sessionId) {
+        String minioKey = "exports/" + sessionId + "/final.mp4";
 
-            // Потоково скачиваем файл прямо на диск
-            s3Client.getObject(getObjectRequest, localPath);
-            System.out.println("[MinIO] Файл успешно скачан: " + minioKey + " -> " + localPath.toAbsolutePath());
-        } catch (Exception e) {
-            throw new RuntimeException("Не удалось скачать файл из MinIO: " + minioKey, e);
-        }
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(minioKey)
+                .build();
+
+        return s3Client.getObject(getObjectRequest);
     }
 }
