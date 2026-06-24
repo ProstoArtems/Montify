@@ -4,13 +4,11 @@ import com.montify.api.model.UserSession;
 import com.montify.api.service.StorageService;
 import com.montify.api.service.SessionService;
 import org.springframework.core.io.InputStreamResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
@@ -49,7 +47,6 @@ public class FileController {
         }
 
         String fileKey = storageService.uploadFile(file, sessionId);
-
         sessionService.addFileToSession(sessionId, fileKey);
 
         return ResponseEntity.ok(Map.of(

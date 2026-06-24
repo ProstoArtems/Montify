@@ -9,12 +9,14 @@ import com.montify.api.dto.queue.RedisManifestDto;
 import com.montify.api.dto.queue.RedisSegmentDto;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/v1/videos")
@@ -38,11 +40,33 @@ public class VideoController {
         );
     }
 
-    @PostMapping("/render")
-    public ResponseEntity<String> startRender(@RequestBody RenderTaskDto httpRequest) {
-        try {
-            List<RedisSegmentDto> redisSegments = new ArrayList<>();
+    @GetMapping("/status/{renderId}")
+    public ResponseEntity<?> getRenderStatus(@PathVariable String renderId) {
+        String status = redisTemplate.opsForValue().get("status:" + renderId);
 
+        if (status == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Задача с таким renderId не найдена"));
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "render_id", renderId,
+                "status", status
+        ));
+    }
+
+    @PostMapping("/render")
+    public ResponseEntity<?> startRender(@RequestBody RenderTaskDto httpRequest) {
+        try {
+            String renderId = httpRequest.getRenderId();
+
+            if (renderId == null || renderId.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Поле renderId обязательно для заполнения"));
+            }
+
+            redisTemplate.opsForValue().set("status:" + renderId, "PROCESSING", 24, TimeUnit.HOURS);
+
+            List<RedisSegmentDto> redisSegments = new ArrayList<>();
             for (RenderSegmentDto httpSegment : httpRequest.getSegments()) {
                 String startFrom = formatTime(httpSegment.getStart());
                 String endAt = formatTime(httpSegment.getEnd());
@@ -57,19 +81,17 @@ public class VideoController {
             RedisManifestDto manifest = new RedisManifestDto(redisSegments);
             RedisRenderTaskDto redisTask = new RedisRenderTaskDto(
                     httpRequest.getSessionId(),
-                    httpRequest.getRenderId(),
+                    renderId,
                     manifest
-            );
+                );
 
             String redisJsonPayload = objectMapper.writeValueAsString(redisTask);
-
-            // Выполняет операцию LPUSH
             redisTemplate.opsForList().leftPush(queueKey, redisJsonPayload);
 
-            return ResponseEntity.ok("Задача добавлена в Redis queue через LPUSH");
+            return ResponseEntity.ok(Map.of("message", "Задача добавлена в Redis queue через LPUSH"));
 
         } catch (JsonProcessingException e) {
-            return ResponseEntity.internalServerError().body("Ошибка трансформации JSON");
+            return ResponseEntity.internalServerError().body(Map.of("error", "Ошибка трансформации JSON"));
         }
     }
 
