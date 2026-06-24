@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.montify.api.dto.RenderTaskDto;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -15,13 +16,14 @@ import java.time.Duration;
 public class VideoRenderConsumer {
 
     private final StringRedisTemplate redisTemplate;
+    private final String queueKey;
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    private static final String QUEUE_KEY = "video_render_queue";
     private volatile boolean isRunning = true;
 
-    public VideoRenderConsumer(StringRedisTemplate redisTemplate) {
+    public VideoRenderConsumer(StringRedisTemplate redisTemplate,
+                               @Value("${app.redis.queue-name}") String queueKey) {
         this.redisTemplate = redisTemplate;
+        this.queueKey = queueKey;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -29,7 +31,8 @@ public class VideoRenderConsumer {
         Thread.startVirtualThread(() -> {
             while (isRunning) {
                 try {
-                    String rawJson = redisTemplate.opsForList().leftPop(QUEUE_KEY, Duration.ofSeconds(5));
+                    // Используем queueKey, подтянутый из .env
+                    String rawJson = redisTemplate.opsForList().leftPop(queueKey, Duration.ofSeconds(5));
 
                     if (rawJson != null) {
                         RenderTaskDto task = objectMapper.readValue(rawJson, RenderTaskDto.class);

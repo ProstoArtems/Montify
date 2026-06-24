@@ -17,11 +17,12 @@ import java.util.UUID;
 public class StorageService {
 
     private final S3Client s3Client;
-    private final String bucketName;
 
-    public StorageService(S3Client s3Client, @Value("${minio.bucket-name}") String bucketName) {
+    @Value("${minio.bucket-name}")
+    private String bucketName;
+
+    public StorageService(S3Client s3Client) {
         this.s3Client = s3Client;
-        this.bucketName = bucketName;
     }
 
     public String uploadFile(MultipartFile file, String sessionId) {

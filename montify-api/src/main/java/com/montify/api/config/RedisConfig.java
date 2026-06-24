@@ -1,26 +1,30 @@
 package com.montify.api.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.serializer.RedisSerializer;
-import org.springframework.data.redis.serializer.StringRedisSerializer;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 @Configuration
 public class RedisConfig {
 
+    @Value("${app.redis.addr}")
+    private String redisAddr;
+
     @Bean
-    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory connectionFactory) {
-        RedisTemplate<String, Object> template = new RedisTemplate<>();
-        template.setConnectionFactory(connectionFactory);
+    public LettuceConnectionFactory redisConnectionFactory() {
+        String[] parts = redisAddr.split(":");
+        String host = parts[0];
+        int port = Integer.parseInt(parts[1]);
 
-        template.setKeySerializer(new StringRedisSerializer());
-        template.setHashKeySerializer(new StringRedisSerializer());
+        RedisStandaloneConfiguration config = new RedisStandaloneConfiguration(host, port);
+        return new LettuceConnectionFactory(config);
+    }
 
-        template.setValueSerializer(RedisSerializer.json());
-        template.setHashValueSerializer(RedisSerializer.json());
-
-        return template;
+    @Bean
+    public StringRedisTemplate stringRedisTemplate(LettuceConnectionFactory connectionFactory) {
+        return new StringRedisTemplate(connectionFactory);
     }
 }
