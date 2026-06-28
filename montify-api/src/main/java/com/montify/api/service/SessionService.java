@@ -39,4 +39,8 @@ public class SessionService {
             throw new RuntimeException("Сессия не найдена или истекла!");
         }
     }
+
+    public void deleteSession(String sessionId) {
+        redisTemplate.delete(SESSION_PREFIX + sessionId);
+    }
 }
