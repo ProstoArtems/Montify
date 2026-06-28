@@ -5,9 +5,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.core.ResponseInputStream;
 
 import java.io.IOException;
@@ -32,6 +36,8 @@ public class StorageService {
             extension = originalFilename.substring(originalFilename.lastIndexOf("."));
         }
 
+        createBucketIfNeeded();
+
         String fileKey = UUID.randomUUID().toString() + extension;
         String fullPath = "uploads/" + sessionId + "/" + fileKey;
         try {
@@ -50,8 +56,33 @@ public class StorageService {
         }
     }
 
+    private void createBucketIfNeeded() {
+        try {
+            s3Client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build());
+        } catch (NoSuchBucketException e) {
+            s3Client.createBucket(CreateBucketRequest.builder().bucket(bucketName).build());
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                s3Client.createBucket(CreateBucketRequest.builder().bucket(bucketName).build());
+            } else {
+                throw e;
+            }
+        }
+    }
+
     public ResponseInputStream<GetObjectResponse> getExportedFileStream(String sessionId) {
         String minioKey = "exports/" + sessionId + "/final.mp4";
+
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(minioKey)
+                .build();
+
+        return s3Client.getObject(getObjectRequest);
+    }
+
+    public ResponseInputStream<GetObjectResponse> getUploadedFileStream(String sessionId, String fileKey) {
+        String minioKey = "uploads/" + sessionId + "/" + fileKey;
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .bucket(bucketName)

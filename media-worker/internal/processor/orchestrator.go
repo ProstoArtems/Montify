@@ -66,7 +66,6 @@ func (o *Orchestrator) ProcessRender(ctx context.Context, task *RenderTask) erro
 	for i, segment := range task.Manifest.Segments {
 		localPath := filepath.Join(tmpDir, segment.FileName)
 
-		// Добавляем параметры обрезки ПЕРЕД флагом -i для точного позиционирования
 		if segment.StartFrom != "" {
 			args = append(args, "-ss", segment.StartFrom)
 		}
@@ -76,23 +75,19 @@ func (o *Orchestrator) ProcessRender(ctx context.Context, task *RenderTask) erro
 
 		args = append(args, "-i", localPath)
 
-		// Так как мы обрезали видео на входе, внутри filter_complex нам
-		// больше не нужны trim и atrim! Потоки уже заходят чистыми, начиная с 0-й секунды.
 		videoLabel := fmt.Sprintf("[v%d]", i)
 		audioLabel := fmt.Sprintf("[a%d]", i)
 
-		// Сбрасываем PTS/ANPTS для правильной склейки в concat
-		filterComplex += fmt.Sprintf("[%d:v]setpts=PTS-STARTPTS%s;", i, videoLabel)
+		filterComplex += fmt.Sprintf("[%d:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS%s;", i, videoLabel)
 		filterComplex += fmt.Sprintf("[%d:a]asetpts=PTS-STARTPTS%s;", i, audioLabel)
 
 		concatInputs += videoLabel + audioLabel
 	}
 
-	// Склеиваем уже подготовленные и идеально обрезанные потоки
 	filterComplex += fmt.Sprintf("%sconcat=n=%d:v=1:a=1[outv][outa]", concatInputs, len(task.Manifest.Segments))
 
 	args = append(args, "-filter_complex", filterComplex, "-map", "[outv]", "-map", "[outa]")
-	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", outputFile)
+	args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", outputFile)
 
 	// 4. Запуск FFmpeg
 	log.Println("Running FFmpeg script...")

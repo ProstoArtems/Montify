@@ -14,7 +14,10 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 import java.util.Map;
 
+import org.springframework.web.bind.annotation.CrossOrigin;
+
 @RestController
+@CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.OPTIONS})
 @RequestMapping("/api/v1/files")
 public class FileController {
 
@@ -24,6 +27,24 @@ public class FileController {
     public FileController(StorageService storageService, SessionService sessionService) {
         this.storageService = storageService;
         this.sessionService = sessionService;
+    }
+
+    @GetMapping("/download/{sessionId}/{fileKey}")
+    public ResponseEntity<InputStreamResource> downloadUploadedFile(@PathVariable String sessionId, @PathVariable String fileKey) {
+        ResponseInputStream<GetObjectResponse> s3Stream = storageService.getUploadedFileStream(sessionId, fileKey);
+
+        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+        try {
+            String contentType = s3Stream.response().contentType();
+            if (contentType != null && !contentType.isBlank()) {
+                mediaType = MediaType.parseMediaType(contentType);
+            }
+        } catch (Exception ignored) {}
+
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + fileKey + "\"")
+                .body(new InputStreamResource(s3Stream));
     }
 
     @GetMapping("/session/start")

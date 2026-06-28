@@ -1,15 +1,18 @@
 spring:
   config:
-    import: "optional:file:.env"
+    import: optional:dotenv:../.env
+
+server:
+  port: 8080
 
 minio:
-  endpoint: ${MINIO_ENDPOINT}
-  access-key: ${MINIO_ACCESS_KEY}
-  secret-key: ${MINIO_SECRET_KEY}
-  bucket-name: ${MINIO_BUCKET_NAME}
-  use-ssl: ${MINIO_USE_SSL}
+  endpoint: ${MINIO_ENDPOINT:localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket-name: ${MINIO_BUCKET_NAME:video-editor}
+  use-ssl: ${MINIO_USE_SSL:false}
 
 app:
   redis:
-    addr: ${REDIS_ADDR}
-    queue-name: ${REDIS_QUEUE_NAME}
+    addr: ${REDIS_ADDR:localhost:6379}
+    queue-name: ${REDIS_QUEUE_NAME:video_render_queue}
