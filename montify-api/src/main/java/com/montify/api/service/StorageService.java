@@ -70,15 +70,19 @@ public class StorageService {
         }
     }
 
-    public ResponseInputStream<GetObjectResponse> getExportedFileStream(String sessionId) {
+    public ResponseInputStream<GetObjectResponse> getExportedFileStream(String sessionId, String rangeHeader) {
         String minioKey = "exports/" + sessionId + "/final.mp4";
 
-        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+        GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
                 .bucket(bucketName)
-                .key(minioKey)
-                .build();
+                .key(minioKey);
 
-        return s3Client.getObject(getObjectRequest);
+        // Если браузер запросил конкретный кусок, просим у MinIO только его
+        if (rangeHeader != null && !rangeHeader.isEmpty()) {
+            requestBuilder.range(rangeHeader);
+        }
+
+        return s3Client.getObject(requestBuilder.build());
     }
 
     public ResponseInputStream<GetObjectResponse> getUploadedFileStream(String sessionId, String fileKey) {

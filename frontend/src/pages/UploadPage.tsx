@@ -42,9 +42,12 @@ function UploadPage() {
         onClick={() => fileInputRef.current?.click()}
       >
         <div className="dropzone-content">
-          <div className="drop-icon">⇪</div>
+          <div className="drop-icon">
+            <img src="/cloud.png" alt="Upload" />
+          </div>
           <h2>Перетащите файлы сюда</h2>
-          <p>Или используйте кнопку ниже, чтобы выбрать файлы на вашем устройстве.</p>
+          <p>Или используйте кнопку ниже, чтобы выбрать файлы на</p>
+          <p>вашем устройстве. Поддерживаются форматы до 1080p</p>
           <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()}>
             Обзор файлов
           </button>
@@ -63,7 +66,7 @@ function UploadPage() {
       <div className="file-list-card">
         <h2>Загруженные файлы</h2>
         {files.length === 0 ? (
-          <p className="empty-state">Пока нет загруженных файлов. Перетащите или выберите файлы выше.</p>
+          <p className="empty-state">Пока нет загруженных файлов. Перетащите или выберите файлы выше</p>
         ) : (
           <div className="file-grid">
             {files.map((file) => (

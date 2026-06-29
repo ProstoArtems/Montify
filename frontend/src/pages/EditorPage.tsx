@@ -42,18 +42,21 @@ function EditorPage() {
     });
   }, [timelineSegments, files]);
 
-  const combinedDuration = timelineWithOffsets.length
-    ? timelineWithOffsets[timelineWithOffsets.length - 1].startInTimeline + timelineWithOffsets[timelineWithOffsets.length - 1].duration
-    : selectedFile?.duration ?? 0;
+  const combinedDuration = Math.max(
+    0,
+    timelineWithOffsets.length
+      ? timelineWithOffsets[timelineWithOffsets.length - 1].startInTimeline + timelineWithOffsets[timelineWithOffsets.length - 1].duration
+      : selectedFile?.duration ?? 0
+  );
 
   const [timelineTime, setTimelineTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(1);
   const [draggedSegmentId, setDraggedSegmentId] = useState<string | null>(null);
   const [dragOverSegmentId, setDragOverSegmentId] = useState<string | null>(null);
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
   const [renderedPreviewUrl, setRenderedPreviewUrl] = useState<string | null>(null);
-  const [previewRenderStatus, setPreviewRenderStatus] = useState<'idle' | 'rendering' | 'ready' | 'error'>('idle');
+  const [previewRenderStatus, setPreviewRenderStatus] = useState<'idle' | 'queued' | 'processing' | 'ready' | 'error'>('idle');
+  const [previewRenderId, setPreviewRenderId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingSeekTimeRef = useRef<number | null>(null);
   const seekInProgressRef = useRef(false);
@@ -74,6 +77,7 @@ function EditorPage() {
       }
       setRenderedPreviewUrl(null);
       setPreviewRenderStatus('idle');
+      setPreviewRenderId(null);
       lastPreviewSignatureRef.current = null;
       return;
     }
@@ -84,109 +88,10 @@ function EditorPage() {
     }
 
     lastPreviewSignatureRef.current = signature;
-    setPreviewRenderStatus('rendering');
-
-    let isCancelled = false;
-
-    const buildPreviewVideo = async () => {
-      const payload = {
-        sessionId,
-        renderId: `preview-${sessionId}-${Date.now()}`,
-        segments: timelineSegments
-          .filter((segment) => segment.fileKey)
-          .map((segment) => ({
-            fileKey: segment.fileKey,
-            start: Math.max(0, Math.floor(segment.start)),
-            end: Math.max(1, Math.ceil(segment.end)),
-          })),
-      };
-
-      try {
-        await fetch(`${API_BASE_URL}/api/v1/videos/render`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-      } catch (error) {
-        if (!isCancelled) {
-          setPreviewRenderStatus('error');
-        }
-        return;
-      }
-
-      const pollStatus = async () => {
-        if (isCancelled) return;
-        try {
-          const res = await fetch(`${API_BASE_URL}/api/v1/videos/status/${payload.renderId}`);
-          if (!res.ok) {
-            throw new Error('status fetch failed');
-          }
-
-          const json = await res.json();
-          if (json.status === 'COMPLETED') {
-            if (!isCancelled) {
-              setRenderedPreviewUrl(`${API_BASE_URL}/api/v1/files/export/${sessionId}?t=${Date.now()}`);
-              setPreviewRenderStatus('ready');
-            }
-            return;
-          }
-
-          if (json.status === 'FAILED') {
-            if (!isCancelled) {
-              setPreviewRenderStatus('error');
-            }
-            return;
-          }
-
-          previewRenderTimeoutRef.current = window.setTimeout(() => {
-            void pollStatus();
-          }, 1500);
-        } catch (error) {
-          if (!isCancelled) {
-            setPreviewRenderStatus('error');
-          }
-        }
-      };
-
-      previewRenderTimeoutRef.current = window.setTimeout(() => {
-        void pollStatus();
-      }, 1000);
-    };
-
-    void buildPreviewVideo();
-
-    return () => {
-      isCancelled = true;
-      if (previewRenderTimeoutRef.current) {
-        window.clearTimeout(previewRenderTimeoutRef.current);
-        previewRenderTimeoutRef.current = null;
-      }
-    };
+    setRenderedPreviewUrl(null);
+    setPreviewRenderStatus('idle');
+    setPreviewRenderId(null);
   }, [sessionId, timelineSignature, timelineSegments]);
-
-  const resolveTimelineToMediaTime = (time: number) => {
-    if (!timelineWithOffsets.length) {
-      return {
-        entry: null as typeof timelineWithOffsets[number] | null,
-        mediaTime: Math.max(0, time),
-        sourceUrl: selectedFile?.url ?? '',
-      };
-    }
-
-    const entry =
-      timelineWithOffsets.find((item) => time < item.startInTimeline + item.duration) ||
-      timelineWithOffsets[timelineWithOffsets.length - 1];
-    const offsetInSegment = Math.max(0, Math.min(entry.duration, time - entry.startInTimeline));
-
-    return {
-      entry,
-      mediaTime: entry.segment.start + offsetInSegment,
-      sourceUrl: entry.file?.url || '',
-    };
-  };
-
-  const resolvedTimelinePosition = useMemo(() => resolveTimelineToMediaTime(timelineTime), [timelineTime, timelineWithOffsets, selectedFile]);
-  const activeTimelineEntry = resolvedTimelinePosition.entry;
 
   const previewPlaybackFile = useMemo(() => {
     if (renderedPreviewUrl) {
@@ -201,24 +106,14 @@ function EditorPage() {
       };
     }
 
-    if (timelineSegments.length > 0 && previewRenderStatus === 'rendering') {
+    if (timelineSegments.length === 0) {
       return selectedFile?.type === 'video' ? selectedFile : null;
     }
 
-    if (timelineSegments.length > 0) {
-      return null;
-    }
-
-    return selectedFile?.type === 'video' ? selectedFile : null;
-  }, [combinedDuration, previewRenderStatus, renderedPreviewUrl, selectedFile, timelineSegments.length]);
+    return null;
+  }, [combinedDuration, renderedPreviewUrl, selectedFile, timelineSegments.length]);
 
   const previewFile = previewPlaybackFile;
-  const previewSegmentStart = activeTimelineEntry?.segment.start ?? 0;
-  const previewSegmentDuration = activeTimelineEntry?.duration ?? 0;
-  const previewSegmentPosition = activeTimelineEntry
-    ? Math.max(0, Math.min(previewSegmentDuration, timelineTime - activeTimelineEntry.startInTimeline))
-    : timelineTime;
-  const previewFileTime = renderedPreviewUrl ? timelineTime : resolvedTimelinePosition.mediaTime;
   const combinedCurrentLabel = formatTime(timelineTime);
   const useRenderedPreview = Boolean(renderedPreviewUrl);
 
@@ -228,36 +123,14 @@ function EditorPage() {
 
     if (!videoRef.current) return;
 
-    if (useRenderedPreview && renderedPreviewUrl) {
-      pendingSeekTimeRef.current = clampedTime;
-      seekInProgressRef.current = true;
-      videoRef.current.src = renderedPreviewUrl;
+    // Если видео уже готово к воспроизведению, сразу меняем время
+    if (videoRef.current.readyState > 0) {
       videoRef.current.currentTime = clampedTime;
-      videoRef.current.load();
-      if (playAfterSeek) {
-        void videoRef.current.play().catch(() => undefined);
-      }
-      return;
-    }
-
-    const targetState = resolveTimelineToMediaTime(clampedTime);
-    const targetFileTime = targetState.mediaTime;
-    const targetSrc = targetState.sourceUrl;
-    const currentSrc = videoRef.current.currentSrc || videoRef.current.src;
-    const normalizedTargetSrc = targetSrc ? new URL(targetSrc, window.location.href).href : '';
-    const sameSource = currentSrc === normalizedTargetSrc;
-
-    pendingSeekTimeRef.current = targetFileTime;
-    seekInProgressRef.current = true;
-    if (sameSource && videoRef.current.readyState > 0) {
-      videoRef.current.currentTime = targetFileTime;
-      pendingSeekTimeRef.current = null;
-      seekInProgressRef.current = false;
     } else {
-      videoRef.current.src = targetSrc;
-      videoRef.current.load();
+      // Если видео (или новый src) еще грузится, откладываем перемотку
+      pendingSeekTimeRef.current = clampedTime;
     }
-
+    
     if (playAfterSeek) {
       void videoRef.current.play().catch(() => undefined);
     }
@@ -318,14 +191,13 @@ function EditorPage() {
 
   const handleLoadedMetadata = () => {
     if (!videoRef.current) return;
-    const seekTime = pendingSeekTimeRef.current ?? previewFileTime;
-    if (seekTime !== null) {
-      videoRef.current.currentTime = seekTime;
+    
+    // Применяем время, которое пользователь успел накликать, пока видео грузилось
+    if (pendingSeekTimeRef.current !== null) {
+      videoRef.current.currentTime = pendingSeekTimeRef.current;
       pendingSeekTimeRef.current = null;
-      seekInProgressRef.current = false;
-    } else if (Math.abs(previewFileTime - videoRef.current.currentTime) > 0.1) {
-      videoRef.current.currentTime = previewFileTime;
     }
+    
     if (isPlaying) {
       void videoRef.current.play().catch(() => undefined);
     }
@@ -333,46 +205,21 @@ function EditorPage() {
 
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
-    if (seekInProgressRef.current) return;
+    
+    // КРИТИЧНО: Игнорируем апдейты времени от плеера, если мы в процессе перетаскивания
+    // или если видео программно перематывается
+    if (seekInProgressRef.current || isDraggingPlayhead) return;
 
-    if (useRenderedPreview) {
-      setTimelineTime(videoRef.current.currentTime);
-      if (videoRef.current.ended) {
-        setIsPlaying(false);
-      }
-      return;
-    }
-
-    if (!activeTimelineEntry) return;
-
-    const videoCurrent = videoRef.current.currentTime;
-    const elapsed = Math.max(0, videoCurrent - previewSegmentStart);
-    const nextCombined = activeTimelineEntry.startInTimeline + Math.min(previewSegmentDuration, elapsed);
-    setTimelineTime(nextCombined);
-
-    if (elapsed >= previewSegmentDuration - 0.05) {
-      const nextIndex = timelineWithOffsets.indexOf(activeTimelineEntry) + 1;
-      if (nextIndex < timelineWithOffsets.length) {
-        const nextEntry = timelineWithOffsets[nextIndex];
-        setTimelineTime(nextEntry.startInTimeline);
-        if (!videoRef.current) return;
-        pendingSeekTimeRef.current = nextEntry.segment.start;
-        seekInProgressRef.current = true;
-        videoRef.current.src = nextEntry.file?.url || '';
-        videoRef.current.load();
-        if (isPlaying) {
-          void videoRef.current.play().catch(() => undefined);
-        }
-      } else {
-        setIsPlaying(false);
-      }
+    setTimelineTime(videoRef.current.currentTime);
+    if (videoRef.current.ended) {
+      setIsPlaying(false);
     }
   };
 
   const togglePlay = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
-      videoRef.current.play();
+      void videoRef.current.play().catch(() => undefined);
       setIsPlaying(true);
     } else {
       videoRef.current.pause();
@@ -380,20 +227,80 @@ function EditorPage() {
     }
   };
 
-  const handleSeek = (value: number) => {
-    seekToTimelineTime(value, false);
-  };
-
   const handleVolume = (value: number) => {
     if (!videoRef.current) return;
     videoRef.current.volume = value;
-    setVolume(value);
   };
 
-  const handleFullScreen = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.requestFullscreen) {
-      videoRef.current.requestFullscreen();
+  const handleRenderPreview = async () => {
+    if (!sessionId || !timelineSegments.length) {
+      setPreviewRenderStatus('error');
+      return;
+    }
+
+    const renderId = `preview-${sessionId}-${Date.now()}`;
+    const payload = {
+      sessionId,
+      renderId,
+      segments: timelineSegments
+        .filter((segment) => segment.fileKey)
+        .map((segment) => ({
+          fileKey: segment.fileKey,
+          start: Math.max(0, Math.floor(segment.start)),
+          end: Math.max(1, Math.ceil(segment.end)),
+          type: segment.type,
+        })),
+    };
+
+    setPreviewRenderId(renderId);
+    setRenderedPreviewUrl(null);
+    setPreviewRenderStatus('queued');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/videos/render`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error('render request failed');
+      }
+
+      setPreviewRenderStatus('processing');
+
+      const pollStatus = async () => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/v1/videos/status/${renderId}`);
+          if (!res.ok) {
+            throw new Error('status fetch failed');
+          }
+
+          const json = await res.json();
+          if (json.status === 'COMPLETED') {
+            setRenderedPreviewUrl(`${API_BASE_URL}/api/v1/files/export/${sessionId}?t=${Date.now()}`);
+            setPreviewRenderStatus('ready');
+            return;
+          }
+
+          if (json.status === 'FAILED') {
+            setPreviewRenderStatus('error');
+            return;
+          }
+
+          previewRenderTimeoutRef.current = window.setTimeout(() => {
+            void pollStatus();
+          }, 1500);
+        } catch {
+          setPreviewRenderStatus('error');
+        }
+      };
+
+      previewRenderTimeoutRef.current = window.setTimeout(() => {
+        void pollStatus();
+      }, 1000);
+    } catch {
+      setPreviewRenderStatus('error');
     }
   };
 
@@ -456,7 +363,10 @@ function EditorPage() {
   return (
     <div className="page editor-page">
       <aside className="editor-sidebar">
-        <button className="sidebar-button">Текст</button>
+        <button className="sidebar-button" title="Текст">
+          <img src="/type.png" alt="Текст" />
+          <span>Текст</span>
+        </button>
       </aside>
       <div className="editor-grid">
         <section className="media-panel">
@@ -493,8 +403,8 @@ function EditorPage() {
             {previewFile ? (
               previewFile.type === 'video' ? (
                 <>
-                  {previewRenderStatus === 'rendering' && (
-                    <div className="empty-state">Собираем единое видео из таймлайна…</div>
+                  {previewRenderStatus === 'error' && (
+                    <div className="empty-state">Не удалось собрать preview</div>
                   )}
                   <video
                     key={previewFile?.url}
@@ -505,41 +415,26 @@ function EditorPage() {
                     onTimeUpdate={handleTimeUpdate}
                     onEnded={() => setIsPlaying(false)}
                   />
-                  <div className="preview-controls-panel">
-                    <div className="controls-left">
-                      <span className="time-label">{combinedCurrentLabel}</span>
+                  <div className="preview-controls-bar">
+                    <div className="preview-time-pill">
+                      <span className='current-label'>{combinedCurrentLabel}</span>
+                      <span>/</span>
+                      <span>{formatTime(combinedDuration)}</span>
+                    </div>
+                    <button type="button" className="video-button main-button" onClick={togglePlay}>
+                      {isPlaying ? '⏸' : '▶'}
+                    </button>
+                    <div className="volume-group">
+                      <button type="button" className="video-button icon-button">🔊</button>
                       <input
                         type="range"
                         min={0}
-                        max={combinedDuration || 0}
-                        value={timelineTime}
-                        step={0.1}
-                        onChange={(event) => handleSeek(Number(event.target.value))}
-                        className="video-slider progress-slider"
+                        max={1}
+                        step={0.01}
+                        defaultValue={1}
+                        onChange={(event) => handleVolume(Number(event.target.value))}
+                        className="video-slider volume-slider"
                       />
-                      <span className="time-label">{formatTime(combinedDuration)}</span>
-                    </div>
-                    <div className="controls-center">
-                      <button type="button" className="video-button main-button" onClick={togglePlay}>
-                        {isPlaying ? '⏸' : '▶'}
-                      </button>
-                    </div>
-                    <div className="controls-right">
-                      <div className="volume-group">
-                        <button type="button" className="video-button icon-button">🔊</button>
-                        <input
-                          type="range"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={volume}
-                          onChange={(event) => handleVolume(Number(event.target.value))}
-                          className="video-slider volume-slider"
-                        />
-                      </div>
-                      <button type="button" className="video-button icon-button" onClick={handleFullScreen}>
-                        ⛶
-                      </button>
                     </div>
                   </div>
                 </>
@@ -550,7 +445,7 @@ function EditorPage() {
                 </div>
               )
             ) : (
-              <div className="empty-state">Выберите файл или сегмент для предварительного просмотра.</div>
+              <div className="empty-state">Выберите файл или сегмент для предварительного просмотра</div>
             )}
           </div>
 
@@ -634,6 +529,18 @@ function EditorPage() {
             <div className="toolbar-left">
               <button type="button" className="video-button small-button">Разрезать</button>
               <button type="button" className="video-button small-button">Удалить</button>
+            </div>
+            <div className="toolbar-right">
+              <button type="button" className="primary-button small-button" onClick={handleRenderPreview} disabled={!timelineSegments.length}>
+                Render preview
+              </button>
+              <span className={`preview-status-pill ${previewRenderStatus}`}>
+                {previewRenderStatus === 'idle' && 'Idle'}
+                {previewRenderStatus === 'queued' && 'Queued'}
+                {previewRenderStatus === 'processing' && 'Processing'}
+                {previewRenderStatus === 'ready' && 'Ready'}
+                {previewRenderStatus === 'error' && 'Error'}
+              </span>
             </div>
           </div>
 

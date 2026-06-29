@@ -10,6 +10,7 @@ type VideoSegment struct {
 	FileName  string `json:"file_name"`
 	StartFrom string `json:"start_from"`
 	EndAt     string `json:"end_at"`
+	Type      string `json:"type"` // 'video' or 'audio'
 }
 
 type TimelineManifest struct {

@@ -58,11 +58,6 @@ function RenderPage() {
   return (
     <div className="page render-page">
       <div className="page-header">
-        <div>
-          <h1>Настройки экспорта</h1>
-          <p>Выберите параметры для финального рендера вашего видео.</p>
-        </div>
-        <div className="session-badge">Session: {sessionId}</div>
       </div>
 
       <div className="render-layout">
@@ -149,10 +144,6 @@ function RenderPage() {
           </div>
 
           <div className="estimate-row">
-            <div>
-              <div className="small-label">Оценочный размер</div>
-              <div className="summary-value">1.42 ГБ</div>
-            </div>
             <div>
               <div className="small-label">Время рендера</div>
               <div className="summary-value">~ 04:20</div>

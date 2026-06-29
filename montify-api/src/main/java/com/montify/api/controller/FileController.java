@@ -5,6 +5,7 @@ import com.montify.api.service.StorageService;
 import com.montify.api.service.SessionService;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -78,12 +79,30 @@ public class FileController {
     }
 
     @GetMapping("/export/{sessionId}")
-    public ResponseEntity<InputStreamResource> exportVideo(@PathVariable String sessionId) {
-        ResponseInputStream<GetObjectResponse> s3Stream = storageService.getExportedFileStream(sessionId);
+    public ResponseEntity<InputStreamResource> exportVideo(
+            @PathVariable String sessionId,
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader) {
 
-        return ResponseEntity.ok()
+        // Передаем заголовок Range в сервис (реализацию см. ниже)
+        ResponseInputStream<GetObjectResponse> s3Stream = storageService.getExportedFileStream(sessionId, rangeHeader);
+        GetObjectResponse s3Response = s3Stream.response();
+
+        ResponseEntity.BodyBuilder responseBuilder;
+
+        // Если MinIO вернул часть контента (отвечая на наш Range запрос), возвращаем 206 статус
+        if (s3Response.contentRange() != null) {
+            responseBuilder = ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+                    .header(HttpHeaders.CONTENT_RANGE, s3Response.contentRange());
+        } else {
+            responseBuilder = ResponseEntity.ok();
+        }
+
+        return responseBuilder
                 .contentType(MediaType.parseMediaType("video/mp4"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"final_" + sessionId + ".mp4\"")
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes") // КРИТИЧНО: говорим браузеру, что поддерживаем перемотку по байтам
+                .contentLength(s3Response.contentLength()) // Длина именно ТЕКУЩЕГО куска (чрезвычайно важно для 206)
+                // Рекомендуется сменить attachment на inline, чтобы браузер воспринимал это как потоковое видео, а не скачиваемый файл
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"final_" + sessionId + ".mp4\"")
                 .body(new InputStreamResource(s3Stream));
-    }
+}
 }

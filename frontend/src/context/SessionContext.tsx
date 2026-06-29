@@ -95,7 +95,6 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     const uploadedFiles = [] as any[];
-    const uploadedSegments: TimelineSegment[] = [];
 
     for (const file of incoming) {
       try {
@@ -133,22 +132,45 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 try {
                   const el = document.createElement(isVideo ? 'video' : 'audio');
                   el.preload = 'metadata';
-                  el.src = src;
+                  el.crossOrigin = 'anonymous';
+                  let resolved = false;
                   const cleanup = () => {
+                    resolved = true;
                     el.onloadedmetadata = null;
                     el.onerror = null;
+                    el.onload = null;
+                  };
+                  const checkDuration = () => {
+                    if (el.duration && el.duration > 0 && !isNaN(el.duration)) {
+                      const d = Math.round(el.duration);
+                      cleanup();
+                      resolve(Math.max(d, 1));
+                    }
                   };
                   el.onloadedmetadata = () => {
-                    const d = Math.round(el.duration || 0);
-                    cleanup();
-                    resolve(d);
+                    checkDuration();
+                  };
+                  el.onload = () => {
+                    checkDuration();
                   };
                   el.onerror = () => {
-                    cleanup();
-                    resolve(0);
+                    if (!resolved) {
+                      cleanup();
+                      resolve(1);
+                    }
                   };
+                  el.src = src;
+                  setTimeout(() => {
+                    if (!resolved) {
+                      checkDuration();
+                      if (!resolved) {
+                        cleanup();
+                        resolve(1);
+                      }
+                    }
+                  }, 3000);
                 } catch (e) {
-                  resolve(0);
+                  resolve(1);
                 }
               });
             const duration = Math.max(await getDuration(url, type === 'video'), 1);
@@ -163,14 +185,6 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
               fileKey,
             };
             uploadedFiles.push(fileRecord);
-            uploadedSegments.push({
-              id: createId(),
-              fileId: fileRecord.id,
-              fileKey,
-              type,
-              start: 0,
-              end: duration,
-            });
             continue;
           }
           throw new Error('Upload failed');
@@ -186,22 +200,46 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
             try {
               const el = document.createElement(isVideo ? 'video' : 'audio');
               el.preload = 'metadata';
-              el.src = src;
+              el.crossOrigin = 'anonymous';
+              let resolved = false;
               const cleanup = () => {
+                resolved = true;
                 el.onloadedmetadata = null;
                 el.onerror = null;
+                el.onload = null;
+              };
+              const checkDuration = () => {
+                if (el.duration && el.duration > 0 && !isNaN(el.duration)) {
+                  const d = Math.round(el.duration);
+                  cleanup();
+                  resolve(Math.max(d, 1));
+                }
               };
               el.onloadedmetadata = () => {
-                const d = Math.round(el.duration || 0);
-                cleanup();
-                resolve(d);
+                checkDuration();
+              };
+              el.onload = () => {
+                checkDuration();
               };
               el.onerror = () => {
-                cleanup();
-                resolve(0);
+                if (!resolved) {
+                  cleanup();
+                  resolve(1);
+                }
               };
+              el.src = src;
+              // Fallback timeout
+              setTimeout(() => {
+                if (!resolved) {
+                  checkDuration();
+                  if (!resolved) {
+                    cleanup();
+                    resolve(1);
+                  }
+                }
+              }, 3000);
             } catch (e) {
-              resolve(0);
+              resolve(1);
             }
           });
 
@@ -218,18 +256,55 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
 
         uploadedFiles.push(fileRecord);
-        uploadedSegments.push({
-          id: createId(),
-          fileId: fileRecord.id,
-          fileKey,
-          type,
-          start: 0,
-          end: duration,
-        });
       } catch (e) {
         // fallback: add as local object url
         const url = URL.createObjectURL(file);
         const type = file.type.startsWith('audio') ? 'audio' : 'video';
+        
+        // Try to get duration from object URL
+        const getDuration = (src: string, isVideo: boolean) =>
+          new Promise<number>((resolve) => {
+            try {
+              const el = document.createElement(isVideo ? 'video' : 'audio');
+              el.preload = 'metadata';
+              let resolved = false;
+              const cleanup = () => {
+                resolved = true;
+                el.onloadedmetadata = null;
+                el.onerror = null;
+                el.onload = null;
+              };
+              const checkDuration = () => {
+                if (el.duration && el.duration > 0 && !isNaN(el.duration)) {
+                  const d = Math.round(el.duration);
+                  cleanup();
+                  resolve(Math.max(d, 1));
+                }
+              };
+              el.onloadedmetadata = () => checkDuration();
+              el.onload = () => checkDuration();
+              el.onerror = () => {
+                if (!resolved) {
+                  cleanup();
+                  resolve(1);
+                }
+              };
+              el.src = src;
+              setTimeout(() => {
+                if (!resolved) {
+                  checkDuration();
+                  if (!resolved) {
+                    cleanup();
+                    resolve(1);
+                  }
+                }
+              }, 2000);
+            } catch (e) {
+              resolve(1);
+            }
+          });
+        
+        const duration = await getDuration(url, type === 'video');
         const fileRecord = {
           id: createId(),
           name: file.name,
@@ -237,17 +312,13 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
           url,
           type,
           size: file.size,
-          duration: undefined,
+          duration,
         };
         uploadedFiles.push(fileRecord);
       }
     }
 
     setFiles((prev) => [...prev, ...uploadedFiles]);
-    setTimelineSegments((prev) => [...prev, ...uploadedSegments]);
-    if (!selectedSegmentId && uploadedSegments.length) {
-      setSelectedSegmentId(uploadedSegments[0].id);
-    }
     if (!selectedFileId && uploadedFiles.length) {
       setSelectedFileId(uploadedFiles[0].id);
     }

@@ -77,7 +77,8 @@ public class VideoController {
                 redisSegments.add(new RedisSegmentDto(
                         httpSegment.getFileKey(),
                         startFrom,
-                        endAt
+                        endAt,
+                        httpSegment.getType() != null ? httpSegment.getType() : "video"
                 ));
             }
 

@@ -75,19 +75,44 @@ func (o *Orchestrator) ProcessRender(ctx context.Context, task *RenderTask) erro
 
 		args = append(args, "-i", localPath)
 
-		videoLabel := fmt.Sprintf("[v%d]", i)
-		audioLabel := fmt.Sprintf("[a%d]", i)
+		// For video segments, apply scaling and padding
+		if segment.Type != "audio" {
+			videoLabel := fmt.Sprintf("[v%d]", i)
+			filterComplex += fmt.Sprintf("[%d:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS%s;", i, videoLabel)
+			concatInputs += videoLabel
 
-		filterComplex += fmt.Sprintf("[%d:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS%s;", i, videoLabel)
-		filterComplex += fmt.Sprintf("[%d:a]asetpts=PTS-STARTPTS%s;", i, audioLabel)
-
-		concatInputs += videoLabel + audioLabel
+			audioLabel := fmt.Sprintf("[a%d]", i)
+			filterComplex += fmt.Sprintf("[%d:a]asetpts=PTS-STARTPTS%s;", i, audioLabel)
+			concatInputs += audioLabel
+		} else {
+			// For audio segments, just adjust timing without scaling
+			audioLabel := fmt.Sprintf("[a%d]", i)
+			filterComplex += fmt.Sprintf("[%d:a]asetpts=PTS-STARTPTS%s;", i, audioLabel)
+			concatInputs += audioLabel
+		}
 	}
 
-	filterComplex += fmt.Sprintf("%sconcat=n=%d:v=1:a=1[outv][outa]", concatInputs, len(task.Manifest.Segments))
+	// Only concat video segments that have video streams
+	var videoSegmentCount int
+	for _, segment := range task.Manifest.Segments {
+		if segment.Type != "audio" {
+			videoSegmentCount++
+		}
+	}
 
-	args = append(args, "-filter_complex", filterComplex, "-map", "[outv]", "-map", "[outa]")
-	args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", outputFile)
+	if videoSegmentCount > 0 {
+		// We have video segments - concatenate them
+		filterComplex += fmt.Sprintf("%sconcat=n=%d:v=1:a=1[outv][outa]", concatInputs, videoSegmentCount)
+		args = append(args, "-filter_complex", filterComplex, "-map", "[outv]", "-map", "[outa]")
+		// Add video and audio codecs
+		args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", outputFile)
+	} else {
+		// Only audio segments - concatenate audio only
+		filterComplex += fmt.Sprintf("%sconcat=n=%d:v=0:a=1[outa]", concatInputs, len(task.Manifest.Segments))
+		args = append(args, "-filter_complex", filterComplex, "-map", "[outa]")
+		// Add only audio codec
+		args = append(args, "-c:a", "aac", "-b:a", "128k", outputFile)
+	}
 
 	// 4. Запуск FFmpeg
 	log.Println("Running FFmpeg script...")
