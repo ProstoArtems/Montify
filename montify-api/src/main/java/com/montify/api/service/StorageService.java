@@ -85,14 +85,19 @@ public class StorageService {
         return s3Client.getObject(requestBuilder.build());
     }
 
-    public ResponseInputStream<GetObjectResponse> getUploadedFileStream(String sessionId, String fileKey) {
+    public ResponseInputStream<GetObjectResponse> getUploadedFileStream(String sessionId, String fileKey,
+            String rangeHeader) {
         String minioKey = "uploads/" + sessionId + "/" + fileKey;
 
-        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+        GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
                 .bucket(bucketName)
-                .key(minioKey)
-                .build();
+                .key(minioKey);
 
-        return s3Client.getObject(getObjectRequest);
+        // Добавляем поддержку R
+        if (rangeHeader != null && !rangeHeader.isEmpty()) {
+            requestBuilder.range(rangeHeader);
+        }
+
+        return s3Client.getObject(requestBuilder.build());
     }
 }

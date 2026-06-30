@@ -1,15 +1,7 @@
-com\montify\api\controller\VideoController.class
 com\montify\api\consumer\VideoRenderConsumer.class
 com\montify\api\config\MinioConfig.class
-com\montify\api\dto\request\RenderTaskDto.class
-com\montify\api\MontifyApiApplication.class
-com\montify\api\service\StorageService.class
-com\montify\api\dto\queue\RedisManifestDto.class
-com\montify\api\dto\queue\RedisRenderTaskDto.class
-com\montify\api\controller\FileController.class
 com\montify\api\config\RedisConfig.class
-com\montify\api\dto\queue\RedisSegmentDto.class
-com\montify\api\service\SessionService.class
-com\montify\api\model\UserSession.class
+com\montify\api\dto\request\RenderTaskDto.class
 com\montify\api\config\MultipartConfig.class
 com\montify\api\dto\request\RenderSegmentDto.class
+com\montify\api\MontifyApiApplication.class

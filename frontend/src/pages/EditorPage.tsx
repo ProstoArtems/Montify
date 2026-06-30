@@ -21,7 +21,6 @@ function EditorPage() {
     updateSegment,
     removeSegment,
     reorderSegments,
-    removeFile,
   } = useSession();
 
   const selectedFile = useMemo(() => files.find((file) => file.id === selectedFileId), [files, selectedFileId]);
@@ -31,36 +30,55 @@ function EditorPage() {
   );
   const selectedSegmentFile = selectedSegment ? files.find((file) => file.id === selectedSegment.fileId) : undefined;
 
-  const timelineWithOffsets = useMemo(() => {
-    let offset = 0;
-    return timelineSegments.map((segment) => {
-      const duration = Math.max(0, segment.end - segment.start);
-      const segmentFile = files.find((file) => file.id === segment.fileId);
-      const result = { segment, file: segmentFile, startInTimeline: offset, duration };
-      offset += duration;
-      return result;
-    });
-  }, [timelineSegments, files]);
-
-  const combinedDuration = Math.max(
-    0,
-    timelineWithOffsets.length
-      ? timelineWithOffsets[timelineWithOffsets.length - 1].startInTimeline + timelineWithOffsets[timelineWithOffsets.length - 1].duration
-      : selectedFile?.duration ?? 0
+  const sourceVideo = useMemo(
+    () => selectedFile?.type === 'video' ? selectedFile : files.find((file) => file.type === 'video') || null,
+    [files, selectedFile]
   );
 
+  const sourceSegments = useMemo(
+    () => timelineSegments.filter((segment) => segment.fileId === sourceVideo?.id),
+    [timelineSegments, sourceVideo?.id]
+  );
+
+  const timelineWithOffsets = useMemo(() => {
+    if (!sourceVideo) {
+      return timelineSegments.map((segment) => {
+        const duration = Math.max(0, segment.end - segment.start);
+        const segmentFile = files.find((file) => file.id === segment.fileId);
+        return { segment, file: segmentFile, startInTimeline: 0, duration };
+      });
+    }
+    return sourceSegments.map((segment) => {
+      const duration = Math.max(0, segment.end - segment.start);
+      const segmentFile = files.find((file) => file.id === segment.fileId);
+      return { segment, file: segmentFile, startInTimeline: segment.start, duration };
+    });
+  }, [timelineSegments, files, sourceVideo, sourceSegments]);
+
+  const combinedDuration = Math.max(0, sourceVideo?.duration ?? selectedFile?.duration ?? 0);
+
   const [timelineTime, setTimelineTime] = useState(0);
+  const [wasPlayingBeforeDrag, setWasPlayingBeforeDrag] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [draggedSegmentId, setDraggedSegmentId] = useState<string | null>(null);
-  const [dragOverSegmentId, setDragOverSegmentId] = useState<string | null>(null);
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
+  const [segmentEdgeDrag, setSegmentEdgeDrag] = useState<{
+    segmentId: string;
+    edge: 'start' | 'end';
+    initialStart: number;
+    initialEnd: number;
+  } | null>(null);
+  const [segmentStartMark, setSegmentStartMark] = useState<number | null>(null);
+  const [segmentEndMark, setSegmentEndMark] = useState<number | null>(null);
   const [renderedPreviewUrl, setRenderedPreviewUrl] = useState<string | null>(null);
   const [previewRenderStatus, setPreviewRenderStatus] = useState<'idle' | 'queued' | 'processing' | 'ready' | 'error'>('idle');
   const [previewRenderId, setPreviewRenderId] = useState<string | null>(null);
+  const [draggedSegmentId, setDraggedSegmentId] = useState<string | null>(null);
+  const [dragOverSegmentId, setDragOverSegmentId] = useState<string | null>(null);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pendingSeekTimeRef = useRef<number | null>(null);
   const seekInProgressRef = useRef(false);
-  const timelineTracksRef = useRef<HTMLDivElement | null>(null);
+  const timelineTrackAreaRef = useRef<HTMLDivElement | null>(null);
   const previewRenderTimeoutRef = useRef<number | null>(null);
   const lastPreviewSignatureRef = useRef<string | null>(null);
 
@@ -94,6 +112,9 @@ function EditorPage() {
   }, [sessionId, timelineSignature, timelineSegments]);
 
   const previewPlaybackFile = useMemo(() => {
+    if (selectedFile?.type === 'video') {
+      return selectedFile;
+    }
     if (renderedPreviewUrl) {
       return {
         id: 'rendered-preview',
@@ -106,16 +127,18 @@ function EditorPage() {
       };
     }
 
-    if (timelineSegments.length === 0) {
-      return selectedFile?.type === 'video' ? selectedFile : null;
+    if (timelineSegments.length > 0) {
+      const firstVideoSegment = timelineSegments.find(s => s.type === 'video');
+      if (firstVideoSegment) {
+        return files.find(f => f.id === firstVideoSegment.fileId) || null;
+      }
     }
 
     return null;
-  }, [combinedDuration, renderedPreviewUrl, selectedFile, timelineSegments.length]);
+  }, [combinedDuration, renderedPreviewUrl, selectedFile, timelineSegments, files]);
 
   const previewFile = previewPlaybackFile;
   const combinedCurrentLabel = formatTime(timelineTime);
-  const useRenderedPreview = Boolean(renderedPreviewUrl);
 
   const seekToTimelineTime = (newTime: number, playAfterSeek = false) => {
     const clampedTime = Math.max(0, Math.min(newTime, combinedDuration));
@@ -123,16 +146,22 @@ function EditorPage() {
 
     if (!videoRef.current) return;
 
-    // Если видео уже готово к воспроизведению, сразу меняем время
-    if (videoRef.current.readyState > 0) {
-      videoRef.current.currentTime = clampedTime;
+    const video = videoRef.current;
+    seekInProgressRef.current = true;
+
+    if (video.seeking) {
+      pendingSeekTimeRef.current = clampedTime;
+      return;
+    }
+
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      video.currentTime = clampedTime;
     } else {
-      // Если видео (или новый src) еще грузится, откладываем перемотку
       pendingSeekTimeRef.current = clampedTime;
     }
-    
+
     if (playAfterSeek) {
-      void videoRef.current.play().catch(() => undefined);
+      void video.play().catch((err) => console.error('[EditorPage] Play failed after seek:', err));
     }
   };
 
@@ -149,75 +178,101 @@ function EditorPage() {
     }
   }, [timelineSegments.length]);
 
-  useEffect(() => {
-    if (!isDraggingPlayhead) return;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const rect = timelineTracksRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      const labelOffset = 72;
-      const usableWidth = Math.max(0, rect.width - labelOffset);
-      const relativeX = Math.min(Math.max(event.clientX - rect.left - labelOffset, 0), usableWidth);
-      const nextTime = (relativeX / usableWidth) * combinedDuration;
-      seekToTimelineTime(nextTime, isPlaying);
-    };
-
-    const handlePointerUp = () => {
-      setIsDraggingPlayhead(false);
-    };
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, [isDraggingPlayhead, combinedDuration, isPlaying]);
+  const getTimelineTimeFromPointer = (clientX: number) => {
+    const rect = timelineTrackAreaRef.current?.getBoundingClientRect();
+    if (!rect || combinedDuration <= 0) return 0;
+    const relativeX = Math.min(Math.max(clientX - rect.left, 0), rect.width);
+    return (relativeX / rect.width) * combinedDuration;
+  };
 
   const handleTimelinePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDraggingPlayhead(true);
+    const currentlyPlaying = isPlaying;
+    setWasPlayingBeforeDrag(currentlyPlaying);
 
-    const rect = timelineTracksRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    if (currentlyPlaying && videoRef.current) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
 
-    const labelOffset = 72;
-    const usableWidth = Math.max(0, rect.width - labelOffset);
-    const relativeX = Math.min(Math.max(event.clientX - rect.left - labelOffset, 0), usableWidth);
-    const nextTime = (relativeX / usableWidth) * combinedDuration;
-    seekToTimelineTime(nextTime, isPlaying);
+    const nextTime = getTimelineTimeFromPointer(event.clientX);
+    seekToTimelineTime(nextTime, false);
   };
+
+  useEffect(() => {
+    if (!isDraggingPlayhead) return;
+
+    const handlePlayheadMove = (event: PointerEvent) => {
+      const rect = timelineTrackAreaRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const relativeX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+      const nextTime = (relativeX / rect.width) * combinedDuration;
+      seekToTimelineTime(nextTime, false);
+    };
+
+    const handlePlayheadUp = () => {
+      setIsDraggingPlayhead(false);
+      if (wasPlayingBeforeDrag && videoRef.current) {
+        void videoRef.current.play().catch(() => undefined);
+        setIsPlaying(true);
+      }
+    };
+
+    window.addEventListener('pointermove', handlePlayheadMove);
+    window.addEventListener('pointerup', handlePlayheadUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePlayheadMove);
+      window.removeEventListener('pointerup', handlePlayheadUp);
+    };
+  }, [isDraggingPlayhead, combinedDuration, wasPlayingBeforeDrag]);
 
   const handleLoadedMetadata = () => {
     if (!videoRef.current) return;
-    
-    // Применяем время, которое пользователь успел накликать, пока видео грузилось
-    if (pendingSeekTimeRef.current !== null) {
-      videoRef.current.currentTime = pendingSeekTimeRef.current;
+
+    const video = videoRef.current;
+    seekInProgressRef.current = true;
+
+    const targetTime = pendingSeekTimeRef.current ?? timelineTime;
+
+    if (targetTime > 0 && video.duration > 0) {
+      video.currentTime = targetTime;
       pendingSeekTimeRef.current = null;
     }
-    
+
     if (isPlaying) {
-      void videoRef.current.play().catch(() => undefined);
+      void video.play().catch(() => undefined);
     }
   };
 
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
-    
-    // КРИТИЧНО: Игнорируем апдейты времени от плеера, если мы в процессе перетаскивания
-    // или если видео программно перематывается
-    if (seekInProgressRef.current || isDraggingPlayhead) return;
+
+    if (seekInProgressRef.current || isDraggingPlayhead || videoRef.current.seeking) {
+      return;
+    }
 
     setTimelineTime(videoRef.current.currentTime);
-    if (videoRef.current.ended) {
-      setIsPlaying(false);
+  };
+
+  const handleSeeked = () => {
+    if (!videoRef.current) return;
+
+    if (pendingSeekTimeRef.current !== null) {
+      const nextTime = pendingSeekTimeRef.current;
+      pendingSeekTimeRef.current = null;
+      videoRef.current.currentTime = nextTime;
+    } else {
+      seekInProgressRef.current = false;
+      setTimelineTime(videoRef.current.currentTime);
     }
   };
 
   const togglePlay = () => {
     if (!videoRef.current) return;
+
     if (videoRef.current.paused) {
       void videoRef.current.play().catch(() => undefined);
       setIsPlaying(true);
@@ -264,7 +319,7 @@ function EditorPage() {
       });
 
       if (!response.ok) {
-        throw new Error('render request failed');
+        throw new Error(`HTTP status ${response.status}`);
       }
 
       setPreviewRenderStatus('processing');
@@ -272,13 +327,13 @@ function EditorPage() {
       const pollStatus = async () => {
         try {
           const res = await fetch(`${API_BASE_URL}/api/v1/videos/status/${renderId}`);
-          if (!res.ok) {
-            throw new Error('status fetch failed');
-          }
+          if (!res.ok) throw new Error(`Status poll HTTP ${res.status}`);
 
           const json = await res.json();
+
           if (json.status === 'COMPLETED') {
-            setRenderedPreviewUrl(`${API_BASE_URL}/api/v1/files/export/${sessionId}?t=${Date.now()}`);
+            const url = `${API_BASE_URL}/api/v1/files/export/${sessionId}?t=${Date.now()}`;
+            setRenderedPreviewUrl(url);
             setPreviewRenderStatus('ready');
             return;
           }
@@ -291,7 +346,7 @@ function EditorPage() {
           previewRenderTimeoutRef.current = window.setTimeout(() => {
             void pollStatus();
           }, 1500);
-        } catch {
+        } catch (pollErr) {
           setPreviewRenderStatus('error');
         }
       };
@@ -299,7 +354,7 @@ function EditorPage() {
       previewRenderTimeoutRef.current = window.setTimeout(() => {
         void pollStatus();
       }, 1000);
-    } catch {
+    } catch (err) {
       setPreviewRenderStatus('error');
     }
   };
@@ -314,6 +369,42 @@ function EditorPage() {
       end: selectedFile.duration,
     });
   };
+
+  const setSegmentStart = () => {
+    setSegmentStartMark(Math.round(timelineTime));
+  };
+
+  const setSegmentEnd = () => {
+    setSegmentEndMark(Math.round(timelineTime));
+  };
+
+  const clearSegmentMarks = () => {
+    setSegmentStartMark(null);
+    setSegmentEndMark(null);
+  };
+
+  const addMarkedSegment = () => {
+    const source = selectedFile?.type === 'video' ? selectedFile : sourceVideo;
+    if (!source || segmentStartMark === null || segmentEndMark === null) return;
+    const start = Math.min(segmentStartMark, segmentEndMark);
+    const end = Math.max(segmentStartMark, segmentEndMark);
+    if (end - start < 1) return;
+    addSegment({
+      fileId: source.id,
+      fileKey: source.fileKey,
+      type: source.type,
+      start,
+      end,
+    });
+    clearSegmentMarks();
+  };
+
+  const hasSelectionRange = segmentStartMark !== null && segmentEndMark !== null && combinedDuration > 0;
+  const selectionRangeStart = hasSelectionRange ? Math.min(segmentStartMark!, segmentEndMark!) : 0;
+  const selectionRangeEnd = hasSelectionRange ? Math.max(segmentStartMark!, segmentEndMark!) : 0;
+  const selectionRangeWidth = hasSelectionRange
+    ? ((selectionRangeEnd - selectionRangeStart) / combinedDuration) * 100
+    : 0;
 
   const moveSegmentOrder = (segmentId: string, direction: number) => {
     const index = timelineSegments.findIndex((segment) => segment.id === segmentId);
@@ -342,7 +433,6 @@ function EditorPage() {
   const handleDrop = (segmentId: string, event: DragEvent<HTMLButtonElement>) => {
     event.preventDefault();
     if (!draggedSegmentId || draggedSegmentId === segmentId) return;
-
     const draggedIndex = timelineSegments.findIndex((segment) => segment.id === draggedSegmentId);
     const targetIndex = timelineSegments.findIndex((segment) => segment.id === segmentId);
     if (draggedIndex === -1 || targetIndex === -1) return;
@@ -355,10 +445,85 @@ function EditorPage() {
     setDragOverSegmentId(null);
   };
 
-  const timelineTotal = Math.max(
-    1,
-    ...timelineSegments.map((segment) => Math.max(1, segment.end - segment.start))
-  );
+  const startSegmentEdgeDrag = (segmentId: string, edge: 'start' | 'end', event: ReactPointerEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const segment = timelineSegments.find((segment) => segment.id === segmentId);
+    if (!segment) return;
+    setSegmentEdgeDrag({
+      segmentId,
+      edge,
+      initialStart: segment.start,
+      initialEnd: segment.end,
+    });
+  };
+
+  const stopSegmentEdgeDrag = () => {
+    setSegmentEdgeDrag(null);
+  };
+
+  const handlePointerMove = (event: PointerEvent) => {
+    if (!segmentEdgeDrag || !timelineTrackAreaRef.current) return;
+    const timelineRect = timelineTrackAreaRef.current.getBoundingClientRect();
+    const positionRatio = Math.max(0, Math.min(1, (event.clientX - timelineRect.left) / timelineRect.width));
+    const newTime = positionRatio * combinedDuration;
+
+    if (segmentEdgeDrag.edge === 'start') {
+      const nextStart = Math.min(newTime, segmentEdgeDrag.initialEnd - 1);
+      updateSegment(segmentEdgeDrag.segmentId, {
+        start: Math.max(0, Math.floor(nextStart)),
+      });
+    } else {
+      const nextEnd = Math.max(newTime, segmentEdgeDrag.initialStart + 1);
+      updateSegment(segmentEdgeDrag.segmentId, {
+        end: Math.min(combinedDuration, Math.ceil(nextEnd)),
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (videoRef.current && previewFile?.url) {
+      const video = videoRef.current;
+      seekInProgressRef.current = true;
+      
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        video.currentTime = timelineTime;
+      } else {
+        pendingSeekTimeRef.current = timelineTime;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewFile?.url]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      const key = event.key.toLowerCase();
+      if (key === 's') {
+        setSegmentStart();
+      }
+      if (key === 'e') {
+        setSegmentEnd();
+      }
+      if (key === 'a' || event.key === '+') {
+        addMarkedSegment();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [timelineTime, selectedFile, segmentStartMark, segmentEndMark, addMarkedSegment]);
+
+  useEffect(() => {
+    if (!segmentEdgeDrag) return;
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopSegmentEdgeDrag);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopSegmentEdgeDrag);
+    };
+  }, [segmentEdgeDrag, handlePointerMove]);
 
   return (
     <div className="page editor-page">
@@ -368,12 +533,13 @@ function EditorPage() {
           <span>Текст</span>
         </button>
       </aside>
+
       <div className="editor-grid">
         <section className="media-panel">
           <div className="panel-header">Медиатека</div>
           <div className="media-list">
             {files.length === 0 ? (
-              <div className="empty-state">Загрузите видео или аудио на странице Импорт.</div>
+              <div className="empty-state">Загрузите video или audio на странице Импорт.</div>
             ) : (
               files.map((file) => (
                 <div key={file.id} className={`media-item ${file.id === selectedFileId ? 'selected' : ''}`}>
@@ -407,17 +573,18 @@ function EditorPage() {
                     <div className="empty-state">Не удалось собрать preview</div>
                   )}
                   <video
-                    key={previewFile?.url}
                     ref={videoRef}
-                    src={previewFile?.url}
+                    src={previewFile?.url || undefined}
                     className="preview-video"
                     onLoadedMetadata={handleLoadedMetadata}
                     onTimeUpdate={handleTimeUpdate}
                     onEnded={() => setIsPlaying(false)}
+                    onSeeked={handleSeeked}
+                    preload="auto"
                   />
                   <div className="preview-controls-bar">
                     <div className="preview-time-pill">
-                      <span className='current-label'>{combinedCurrentLabel}</span>
+                      <span className="current-label">{combinedCurrentLabel}</span>
                       <span>/</span>
                       <span>{formatTime(combinedDuration)}</span>
                     </div>
@@ -448,8 +615,6 @@ function EditorPage() {
               <div className="empty-state">Выберите файл или сегмент для предварительного просмотра</div>
             )}
           </div>
-
-          {/* timeline-card moved to span full editor-grid (see below) */}
         </section>
 
         <section className="properties-panel">
@@ -523,12 +688,26 @@ function EditorPage() {
           )}
         </section>
 
-        {/* timeline-card spanning full width of editor-grid */}
         <div className="timeline-card full-width">
           <div className="timeline-toolbar">
             <div className="toolbar-left">
-              <button type="button" className="video-button small-button">Разрезать</button>
-              <button type="button" className="video-button small-button">Удалить</button>
+              <button type="button" className="video-button small-button" onClick={setSegmentStart} disabled={combinedDuration === 0}>
+                Установить старт S
+              </button>
+              <button type="button" className="video-button small-button" onClick={setSegmentEnd} disabled={combinedDuration === 0}>
+                Установить конец E
+              </button>
+              <button type="button" className="primary-button small-button" onClick={addMarkedSegment} disabled={segmentStartMark === null || segmentEndMark === null}>
+                Добавить сегмент
+              </button>
+              <button type="button" className="secondary-button small-button" onClick={clearSegmentMarks} disabled={segmentStartMark === null && segmentEndMark === null}>
+                Сбросить метки
+              </button>
+            </div>
+            <div className="marker-info">
+              {segmentStartMark !== null && <span>Start: {formatTime(segmentStartMark)}</span>}
+              {segmentEndMark !== null && <span>End: {formatTime(segmentEndMark)}</span>}
+              {segmentStartMark === null && segmentEndMark === null && <span>Нажмите S / E, чтобы отметить диапазон</span>}
             </div>
             <div className="toolbar-right">
               <button type="button" className="primary-button small-button" onClick={handleRenderPreview} disabled={!timelineSegments.length}>
@@ -559,10 +738,33 @@ function EditorPage() {
                 })}
               </div>
 
-              <div className="timeline-tracks" ref={timelineTracksRef} onPointerDown={handleTimelinePointerDown}>
+              <div className="timeline-tracks" ref={timelineTrackAreaRef} onPointerDown={handleTimelinePointerDown}>
                 <div className="track-row video-track">
                   <div className="track-label">Видео</div>
                   <div className="track-area">
+
+                    {hasSelectionRange && (
+                      <div
+                        className="selection-range"
+                        style={{
+                          left: `${(selectionRangeStart / combinedDuration) * 100}%`,
+                          width: `${selectionRangeWidth}%`,
+                        }}
+                      />
+                    )}
+                    {segmentStartMark !== null && (
+                      <div
+                        className="segment-marker segment-start-marker"
+                        style={{ left: `${(segmentStartMark / combinedDuration) * 100}%` }}
+                      />
+                    )}
+                    {segmentEndMark !== null && (
+                      <div
+                        className="segment-marker segment-end-marker"
+                        style={{ left: `${(segmentEndMark / combinedDuration) * 100}%` }}
+                      />
+                    )}
+
                     <div className="track-inner">
                       {timelineWithOffsets
                         .filter((entry) => entry.file?.type === 'video')
@@ -570,14 +772,27 @@ function EditorPage() {
                           const denom = Math.max(1, combinedDuration);
                           const left = (entry.startInTimeline / denom) * 100;
                           const width = (entry.duration / denom) * 100;
+                          const isSelected = entry.segment.id === selectedSegmentId;
                           return (
                             <div
                               key={entry.segment.id}
-                              className="track-segment"
+                              className={`track-segment ${isSelected ? 'selected' : ''}`}
                               style={{ left: `${left}%`, width: `${width}%` }}
                               onClick={() => selectSegment(entry.segment.id)}
                             >
+                              <div
+                                role="button"
+                                className={`segment-handle start-handle ${isSelected ? 'active' : ''}`}
+                                onPointerDown={(event) => startSegmentEdgeDrag(entry.segment.id, 'start', event)}
+                                onClick={(event) => event.stopPropagation()}
+                              />
                               <div className="seg-title">{entry.file?.name}</div>
+                              <div
+                                role="button"
+                                className={`segment-handle end-handle ${isSelected ? 'active' : ''}`}
+                                onPointerDown={(event) => startSegmentEdgeDrag(entry.segment.id, 'end', event)}
+                                onClick={(event) => event.stopPropagation()}
+                              />
                             </div>
                           );
                         })}
@@ -595,9 +810,27 @@ function EditorPage() {
                           const denom = Math.max(1, combinedDuration);
                           const left = (entry.startInTimeline / denom) * 100;
                           const width = (entry.duration / denom) * 100;
+                          const isSelected = entry.segment.id === selectedSegmentId;
                           return (
-                            <div key={entry.segment.id} className="track-segment audio" style={{ left: `${left}%`, width: `${width}%` }}>
+                            <div
+                              key={entry.segment.id}
+                              className={`track-segment audio ${isSelected ? 'selected' : ''}`}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              onClick={() => selectSegment(entry.segment.id)}
+                            >
+                              <div
+                                role="button"
+                                className={`segment-handle start-handle ${isSelected ? 'active' : ''}`}
+                                onPointerDown={(event) => startSegmentEdgeDrag(entry.segment.id, 'start', event)}
+                                onClick={(event) => event.stopPropagation()}
+                              />
                               <div className="seg-title">{entry.file?.name}</div>
+                              <div
+                                role="button"
+                                className={`segment-handle end-handle ${isSelected ? 'active' : ''}`}
+                                onPointerDown={(event) => startSegmentEdgeDrag(entry.segment.id, 'end', event)}
+                                onClick={(event) => event.stopPropagation()}
+                              />
                             </div>
                           );
                         })}
@@ -607,6 +840,80 @@ function EditorPage() {
 
                 <div className="playhead" style={{ left: combinedDuration ? `${(timelineTime / combinedDuration) * 100}%` : '0%' }} />
               </div>
+
+              {timelineSegments.length > 0 && (
+                <div className="segment-list">
+                  <div className="segment-list-header">Список сегментов</div>
+                  <div className="segment-list-items">
+                    {timelineSegments.map((segment, index) => {
+                      const file = files.find((item) => item.id === segment.fileId);
+                      return (
+                        <button
+                          key={segment.id}
+                          type="button"
+                          className={`segment-list-item ${selectedSegmentId === segment.id ? 'selected' : ''} ${dragOverSegmentId === segment.id ? 'drag-over' : ''}`}
+                          onClick={() => {
+                            // 1. Выбираем сам сегмент
+                            selectSegment(segment.id);
+                            
+                            // 2. ИСПРАВЛЕНИЕ: Переключаем активный файл на тот, к которому относится сегмент
+                            selectFile(segment.fileId);
+                            
+                            // 3. (Опционально) Перематываем плеер на начало сегмента
+                            const videoElement = document.querySelector('video');
+                            if (videoElement) {
+                              videoElement.currentTime = segment.start;
+                            }
+                          }}
+                          draggable
+                          onDragStart={() => handleDragStart(segment.id)}
+                          onDragEnd={handleDragEnd}
+                          onDragOver={(event) => handleDragOver(segment.id, event)}
+                          onDrop={(event) => handleDrop(segment.id, event)}
+                        >
+                          <div className="segment-list-title">
+                            {file?.name || segment.fileId} • {formatTime(segment.start)} - {formatTime(segment.end)}
+                          </div>
+                          <div className="segment-list-actions">
+                            <button
+                              type="button"
+                              className="small-button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                moveSegmentOrder(segment.id, -1);
+                              }}
+                              disabled={index === 0}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="small-button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                moveSegmentOrder(segment.id, 1);
+                              }}
+                              disabled={index === timelineSegments.length - 1}
+                            >
+                              ↓
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button small-button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                removeSegment(segment.id);
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

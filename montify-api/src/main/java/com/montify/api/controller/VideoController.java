@@ -21,7 +21,8 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.web.bind.annotation.CrossOrigin;
 
 @RestController
-@CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.OPTIONS})
+@CrossOrigin(origins = "*", allowedHeaders = "*", methods = { RequestMethod.GET, RequestMethod.POST,
+        RequestMethod.OPTIONS })
 @RequestMapping("/api/v1/videos")
 public class VideoController {
 
@@ -30,7 +31,7 @@ public class VideoController {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public VideoController(StringRedisTemplate redisTemplate,
-                           @Value("${app.redis.queue-name}") String queueKey) {
+            @Value("${app.redis.queue-name}") String queueKey) {
         this.redisTemplate = redisTemplate;
         this.queueKey = queueKey;
     }
@@ -39,8 +40,7 @@ public class VideoController {
     public Map<String, String> getStatus() {
         return Map.of(
                 "status", "OK",
-                "service", "Montify API"
-        );
+                "service", "Montify API");
     }
 
     @GetMapping("/status/{renderId}")
@@ -54,8 +54,7 @@ public class VideoController {
 
         return ResponseEntity.ok(Map.of(
                 "render_id", renderId,
-                "status", status
-        ));
+                "status", status));
     }
 
     @PostMapping("/render")
@@ -78,16 +77,14 @@ public class VideoController {
                         httpSegment.getFileKey(),
                         startFrom,
                         endAt,
-                        httpSegment.getType() != null ? httpSegment.getType() : "video"
-                ));
+                        httpSegment.getType() != null ? httpSegment.getType() : "video"));
             }
 
             RedisManifestDto manifest = new RedisManifestDto(redisSegments);
             RedisRenderTaskDto redisTask = new RedisRenderTaskDto(
                     httpRequest.getSessionId(),
                     renderId,
-                    manifest
-                );
+                    manifest);
 
             String redisJsonPayload = objectMapper.writeValueAsString(redisTask);
             redisTemplate.opsForList().leftPush(queueKey, redisJsonPayload);

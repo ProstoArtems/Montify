@@ -1,4 +1,16 @@
 services:
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: montify_frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    restart: always
+
   api:
     build:
       context: ./montify-api              # Путь к директории, где лежат pom.xml и src вашего Java-проекта
