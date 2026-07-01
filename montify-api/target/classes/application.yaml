@@ -16,3 +16,7 @@ app:
   redis:
     addr: ${REDIS_ADDR:localhost:6379}
     queue-name: ${REDIS_QUEUE_NAME:video_render_queue}
+  cleanup:
+    cron: "${APP_CLEANUP_CRON:0 0 0 * * *}"
+    retention-days: ${APP_CLEANUP_RETENTION_DAYS:0}
+    
